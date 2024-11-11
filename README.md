@@ -1,4 +1,10 @@
+
+## Change notes
+
+- Support wheel odometry through params in `odometry_estimation_cpu.json`. Handle long corridor case
+
 # glim_ros2
+
 
 Please open issues in the main GLIM repository: https://github.com/koide3/glim
 
