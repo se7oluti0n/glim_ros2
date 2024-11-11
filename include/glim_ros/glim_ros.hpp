@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 
 namespace glim {
 class TimeKeeper;
@@ -28,6 +29,7 @@ public:
   bool needs_wait();
   void timer_callback();
 
+  void raw_odom_callback(const sensor_msgs::msg::JointState::SharedPtr msg);
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg);
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
   size_t points_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
@@ -59,6 +61,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr points_sub;
   image_transport::Subscriber image_sub;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr raw_odom_sub;
 };
 
 }  // namespace glim
