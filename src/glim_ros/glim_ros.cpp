@@ -40,9 +40,8 @@ namespace glim {
 GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options) {
   // Setup logger
   auto logger = spdlog::stdout_color_mt("glim");
+  logger->sinks().push_back(get_ringbuffer_sink());
   spdlog::set_default_logger(logger);
-  auto ringbuffer_sink = get_ringbuffer_sink();
-  logger->sinks().push_back(ringbuffer_sink);
 
   bool debug = false;
   this->declare_parameter<bool>("debug", false);
@@ -55,6 +54,14 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
     logger->set_level(spdlog::level::trace);
   }
 
+  dump_on_unload = false;
+  this->declare_parameter<bool>("dump_on_unload", false);
+  this->get_parameter<bool>("dump_on_unload", dump_on_unload);
+
+  if (dump_on_unload) {
+    spdlog::info("dump_on_unload={}", dump_on_unload);
+  }
+
   std::string config_path;
   this->declare_parameter<std::string>("config_path", "config");
   this->get_parameter<std::string>("config_path", config_path);
@@ -64,7 +71,7 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
     config_path = ament_index_cpp::get_package_share_directory("glim") + "/" + config_path;
   }
 
-  spdlog::info("config_path: {}", config_path);
+  logger->info("config_path: {}", config_path);
   glim::GlobalConfig::instance(config_path);
   glim::Config config_ros(glim::GlobalConfig::get_config_path("config_ros"));
 
@@ -187,6 +194,12 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
 GlimROS::~GlimROS() {
   spdlog::debug("quit");
   extension_modules.clear();
+
+  if (dump_on_unload) {
+    std::string dump_path = "/tmp/dump";
+    wait(true);
+    save(dump_path);
+  }
 }
 
 const std::vector<std::shared_ptr<GenericTopicSubscription>>& GlimROS::extension_subscriptions() {

@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 
   // Playback speed settings
   const double playback_speed = config_ros.param<double>("glim_ros", "playback_speed", 100.0);
-  const auto real_t0 = std::chrono::high_resolution_clock::now();
+  std::chrono::high_resolution_clock::time_point real_t0;
   rcutils_time_point_value_t bag_t0 = 0;
   SpeedCounter speed_counter;
 
@@ -163,14 +163,18 @@ int main(int argc, char** argv) {
     rclcpp::Serialization<sensor_msgs::msg::CompressedImage> compressed_image_serialization;
 
     while (reader.has_next()) {
-      rclcpp::spin_some(glim);
       if (!rclcpp::ok()) {
         return false;
       }
+      rclcpp::spin_some(glim);
 
       const auto msg = reader.read_next();
       const std::string topic_type = topic_type_map[msg->topic_name];
       const rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
+
+      if (real_t0.time_since_epoch().count() == 0) {
+        real_t0 = std::chrono::high_resolution_clock::now();
+      }
 
       const auto msg_time = get_msg_recv_timestamp(*msg);
       if (bag_t0 == 0) {
@@ -178,8 +182,13 @@ int main(int argc, char** argv) {
       }
       spdlog::debug("msg_time: {} ({} sec)", msg_time / 1e9, (msg_time - bag_t0) / 1e9);
 
-      if (start_offset > 0.0 && msg_time - bag_t0 < start_offset * 1e9) {
-        spdlog::debug("skipping msg for start_offset ({} < {})", (msg_time - bag_t0) / 1e9, start_offset);
+      if (start_offset > 0.0) {
+        spdlog::info("skipping msg for start_offset {}", start_offset);
+        reader.seek(bag_t0 + start_offset * 1e9);
+
+        start_offset = 0.0;
+        bag_t0 = 0;
+        real_t0 = std::chrono::high_resolution_clock::from_time_t(0);
         continue;
       }
 
@@ -195,14 +204,24 @@ int main(int argc, char** argv) {
 
       const auto bag_elapsed = std::chrono::nanoseconds(msg_time - bag_t0);
       while (playback_speed > 0.0 && (std::chrono::high_resolution_clock::now() - real_t0) * playback_speed < bag_elapsed) {
+        const double real_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - real_t0).count() / 1e9;
+        spdlog::debug("throttling (real_elapsed={} bag_elapsed={} playback_speed={})", real_elapsed, bag_elapsed.count() / 1e9, playback_speed);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
 
       if (msg->topic_name == imu_topic) {
+        if (topic_type != "sensor_msgs/msg/Imu") {
+          spdlog::error("topic_type mismatch: {} != sensor_msgs/msg/Imu (topic={})", topic_type, msg->topic_name);
+          return false;
+        }
         auto imu_msg = std::make_shared<sensor_msgs::msg::Imu>();
         imu_serialization.deserialize_message(&serialized_msg, imu_msg.get());
         glim->imu_callback(imu_msg);
       } else if (msg->topic_name == points_topic) {
+        if (topic_type != "sensor_msgs/msg/PointCloud2") {
+          spdlog::error("topic_type mismatch: {} != sensor_msgs/msg/PointCloud2 (topic={})", topic_type, msg->topic_name);
+          return false;
+        }
         auto points_msg = std::make_shared<sensor_msgs::msg::PointCloud2>();
         points_serialization.deserialize_message(&serialized_msg, points_msg.get());
         const size_t workload = glim->points_callback(points_msg);
@@ -218,23 +237,28 @@ int main(int argc, char** argv) {
           spdlog::debug("throttling: {} msec (workload={})", sleep_msec, workload);
           std::this_thread::sleep_for(std::chrono::milliseconds(sleep_msec));
         }
-      } else if (msg->topic_name == image_topic && topic_type == "sensor_msgs/msg/Image") {
-        auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
-        image_serialization.deserialize_message(&serialized_msg, image_msg.get());
-        glim->image_callback(image_msg);
-      } else if (msg->topic_name == image_topic && topic_type == "sensor_msgs/msg/CompressedImage") {
-        auto compressed_image_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
-        compressed_image_serialization.deserialize_message(&serialized_msg, compressed_image_msg.get());
+      } else if (msg->topic_name == image_topic) {
+        if (topic_type == "sensor_msgs/msg/Image") {
+          auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
+          image_serialization.deserialize_message(&serialized_msg, image_msg.get());
+          glim->image_callback(image_msg);
+        } else if (topic_type == "sensor_msgs/msg/CompressedImage") {
+          auto compressed_image_msg = std::make_shared<sensor_msgs::msg::CompressedImage>();
+          compressed_image_serialization.deserialize_message(&serialized_msg, compressed_image_msg.get());
 
-        auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
-        cv_bridge::toCvCopy(*compressed_image_msg, "bgr8")->toImageMsg(*image_msg);
-        glim->image_callback(image_msg);
+          auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
+          cv_bridge::toCvCopy(*compressed_image_msg, "bgr8")->toImageMsg(*image_msg);
+          glim->image_callback(image_msg);
+        } else {
+          spdlog::error("topic_type mismatch: {} != sensor_msgs/msg/(Image|CompressedImage) (topic={})", topic_type, msg->topic_name);
+          return false;
+        }
       }
 
       auto found = subscription_map.find(msg->topic_name);
       if (found != subscription_map.end()) {
         for (const auto& sub : found->second) {
-          sub->insert_message_instance(serialized_msg);
+          sub->insert_message_instance(serialized_msg, topic_type);
         }
       }
 
@@ -245,6 +269,7 @@ int main(int argc, char** argv) {
       while (glim->needs_wait()) {
         rclcpp::spin_some(glim);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        spdlog::debug("throttling (waiting for odometry estimation)");
         if (std::chrono::high_resolution_clock::now() - t0 > std::chrono::seconds(1)) {
           spdlog::warn("throttling timeout (an extension module may be hanged)");
           break;

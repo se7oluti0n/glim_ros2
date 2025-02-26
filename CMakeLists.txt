@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(glim_ros VERSION 1.0.6 LANGUAGES CXX)
+project(glim_ros VERSION 1.0.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
@@ -15,6 +15,7 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
 find_package(glim REQUIRED)
+find_package(Boost REQUIRED COMPONENTS program_options)
 
 if(BUILD_WITH_CUDA)
   add_definitions(-DBUILD_GTSAM_POINTS_GPU)
@@ -77,6 +78,7 @@ if(BUILD_WITH_VIEWER)
   )
   target_link_libraries(offline_viewer
     glim::interactive_viewer
+    Boost::program_options
   )
 endif()
 
